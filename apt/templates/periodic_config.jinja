@@ -1,0 +1,14 @@
+{% set apt = pillar.get('apt', {}) -%}
+{% set unattended = apt.get('unattended', {}) -%}
+{% set enabled = unattended.get('enabled', '1') -%}
+{% set update_package_lists = unattended.get('update_package_lists', '1') -%}
+{% set download_upgradeable_packages = unattended.get('download_upgradeable_packages', '1') -%}
+{% set unattended_upgrade = unattended.get('unattended_upgrade', '1') -%}
+{% set auto_clean_interval = unattended.get('auto_clean_interval', '7') -%}
+{% set verbose = unattended.get('verbose', '2') -%}
+APT::Periodic::Enable "{{ enabled }}";
+APT::Periodic::Update-Package-Lists "{{ update_package_lists }}";
+APT::Periodic::Download-Upgradeable-Packages "{{ download_upgradeable_packages }}";
+APT::Periodic::Unattended-Upgrade "{{ unattended_upgrade }}";
+APT::Periodic::AutocleanInterval "{{ auto_clean_interval }}";
+APT::Periodic::Verbose "{{ verbose }}";

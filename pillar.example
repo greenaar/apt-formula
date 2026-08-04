@@ -1,0 +1,68 @@
+# Example pillar for the apt formula. Every key is optional - the formula
+# ships sensible OS-specific defaults (main/security/updates repos, empty
+# preferences/apt_conf.d) in map.jinja. This example shows the knobs you're
+# most likely to actually reach for. See README.md for the full reference.
+
+apt:
+  # Leave /etc/apt/sources.list alone; all repo management happens via
+  # apt:repositories below, written into sources_list_dir.
+  remove_sources_list: false
+  clean_sources_list_d: true   # remove any *.list Salt didn't put there
+
+  clean_keyrings_d: false
+
+  # Global apt pinning.
+  preferences:
+    pin-nginx:
+      package: 'nginx*'
+      pin: 'origin nginx.org'
+      priority: 900
+      explanation:
+        - Prefer nginx.org's own packages over the Debian/Ubuntu default
+
+  # apt.conf.d snippets.
+  apt_conf_d:
+    99no-recommends:
+      - 'APT::Install-Recommends "0";'
+      - 'APT::Install-Suggests "0";'
+    99no-languages:
+      - 'Acquire::Languages "none";'
+
+  # HTTP basic auth for an authenticated repo -> /etc/apt/auth.conf (0600).
+  # Pull the password from an encrypted pillar (GPG/Vault), never inline.
+  auth:
+    - host: packages.example.com
+      login: deploy
+      password: '{{ pillar["vault"]["apt_auth_password"] }}'
+
+  # Third-party repositories, merged with the OS defaults already present
+  # under this key (main/security/updates for Debian or Ubuntu).
+  repositories:
+    docker:
+      distro: '{{ grains["oscodename"] }}'
+      url: 'https://download.docker.com/linux/{{ grains["os"]|lower }}'
+      comps:
+        - stable
+      # key_url (fetch the vendor's own published key) is strongly
+      # preferred over keyid+keyserver - see README.md.
+      key_url: 'https://download.docker.com/linux/{{ grains["os"]|lower }}/gpg'
+      opts:
+        signed-by: /etc/apt/keyrings/docker.gpg
+
+    packages-example-com:
+      distro: '{{ grains["oscodename"] }}'
+      url: 'https://packages.example.com/apt'
+      comps:
+        - main
+      key_url: 'https://packages.example.com/apt/signing-key.asc'
+      opts:
+        signed-by: /etc/apt/keyrings/packages-example-com.gpg
+
+  # apt.unattended (only applied if you `include: - apt.unattended`)
+  unattended:
+    unattended_config_template: salt://apt/templates/unattended_config.jinja
+    periodic_config_template: salt://apt/templates/periodic_config.jinja
+
+  # apt.listchanges (only applied if you `include: - apt.listchanges`)
+  listchanges:
+    listchanges_config_template: salt://apt/templates/listchanges_config.jinja

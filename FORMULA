@@ -1,0 +1,9 @@
+name: apt
+os: Debian, Raspbian, Ubuntu
+os_family: Debian
+version: 1.0.0
+release: 1
+minimum_version: 3006
+summary: 'apt formula'
+description: 'Manage apt on Debian and Ubuntu: sources, keyrings, pinning preferences, apt.conf.d snippets, unattended-upgrades, apt-listchanges, PPAs, and package refresh/upgrade.'
+top_level_dir: apt

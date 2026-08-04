@@ -1,0 +1,165 @@
+# -*- coding: utf-8 -*-
+# vim: ft=sls
+#
+# Manages /etc/apt/sources.list(.d), a keyrings dir, and (optionally)
+# /etc/apt/auth.conf for authenticated repos.
+#
+# State IDs below are namespaced (apt-repositories-*, apt-repo-<name>-*)
+# rather than using the managed paths themselves as IDs. A bare path like
+# `/etc/apt/keyrings` as a state ID looks convenient, but Salt state IDs
+# are global across the whole compiled highstate - the moment any other
+# formula in the same run also happens to manage that path (which is
+# common: /etc/apt/keyrings is a fairly standard drop location other
+# formulas reach for too, e.g. one that installs its own signed-by repo)
+# you get "Detected conflicting IDs" and the whole run fails to compile.
+
+{% from "apt/map.jinja" import apt as apt_map with context %}
+{% set apt = pillar.get('apt', {}) %}
+{% set remove_sources_list = apt.get('remove_sources_list', apt_map.remove_sources_list) %}
+{% set clean_sources_list_d = apt.get('clean_sources_list_d', apt_map.clean_sources_list_d) %}
+{% set sources_list_dir = apt.get('sources_list_dir', apt_map.sources_list_dir) %}
+{% set repositories = apt.get('repositories', apt_map.repositories) %}
+{% set keyrings_dir = apt.get('keyrings_dir', apt_map.keyrings_dir) %}
+{% set clean_keyrings_d = apt.get('clean_keyrings_d', apt_map.clean_keyrings_d) %}
+{% set default_url = apt.get('default_url', apt_map.default_url) %}
+{% set keyring_package = apt.get('keyring_package', apt_map.default_keyring_package) %}
+{% set auth = apt.get('auth', apt_map.auth) %}
+
+apt-repositories-keyring-package:
+  pkg.installed:
+    - name: {{ keyring_package }}
+
+apt-repositories-sources-list:
+  file.managed:
+    - name: /etc/apt/sources.list
+    - mode: '0644'
+    - user: root
+    - group: root
+  {% if remove_sources_list %}
+    - contents: ''
+    - contents_newline: False
+  {% else %}
+    - replace: False
+  {% endif %}
+
+{% set excluded_sources = [] %}
+{% set unmanaged_repos = [] %}
+{% for repo, args in repositories.items() %}
+  {% if args.unmanaged is defined and args.unmanaged %}
+    {# repo.list is considered the filename unless filename is explicitly defined.
+     # managed repo lists files are constructed repo-type.list #}
+    {% do excluded_sources.append(args.filename if args.filename is defined else repo ~ '.list') %}
+    {% do unmanaged_repos.append(repo) %}
+  {% endif %}
+{% endfor %}
+{% for repo in unmanaged_repos %}
+  {# remove these repo's to avoid pgrepo.managed loop #}
+  {% do repositories.pop(repo) %}
+{% endfor %}
+
+apt-repositories-sources-list-dir:
+  file.directory:
+    - name: {{ sources_list_dir }}
+    - mode: '0755'
+    - user: root
+    - group: root
+    - clean: {{ clean_sources_list_d }}
+    - exclude_pat: {{ excluded_sources | json }}
+
+apt-repositories-keyrings-dir:
+  file.directory:
+    - name: {{ keyrings_dir }}
+    - mode: '0755'
+    - user: root
+    - group: root
+    - clean: {{ clean_keyrings_d }}
+
+{% if auth %}
+# Credentials for authenticated repos (HTTP basic auth). Mode 0600 since
+# this can contain plaintext passwords.
+apt-repositories-auth-conf:
+  file.managed:
+    - name: /etc/apt/auth.conf
+    - source: salt://apt/templates/auth.conf.jinja
+    - template: jinja
+    - user: root
+    - group: root
+    - mode: '0600'
+{% endif %}
+
+{% for repo, args in repositories.items() %}
+
+{% set r_opts = '' %}
+{%- set r_arch = 'arch=' ~ args.arch|join(',') if args.arch is defined else '' %}
+{% if args.opts is defined %}
+  {% if args.opts is string %}
+    {% set r_opts = args.opts %}
+  {% else %}
+    {% set r_opts_list = [] %}
+    {%- for k, v in args.opts.items() %}
+      {% do r_opts_list.append(k ~ '=' ~ v) %}
+    {%- endfor %}
+    {% set r_opts =  r_opts_list|join(' ') %}
+  {% endif %}
+{% endif %}
+
+{% if r_arch != '' or r_opts != '' %}
+  {% set r_options = '[' ~ r_arch ~ ' ' ~ r_opts ~ ' ]' %}
+{% else %}
+  {% set r_options = '' %}
+{% endif %}
+
+{%- set r_url = args.url or default_url %}
+{%- set r_distro = args.distro or 'stable' %}
+{%- set r_comps = args.comps|default(['main'])|join(' ') %}
+{%- set r_keyserver = args.keyserver if args.keyserver is defined else apt_map.default_keyserver %}
+
+  {%- for type in args.type|d(['binary']) %}
+    {%- set r_type = 'deb-src' if type == 'source' else 'deb' %}
+    {%- set r_file = args.filename if args.filename is defined else repo ~ '-' ~ type ~ '.list' %}
+    {%- set r_id = 'apt-repo-' ~ repo ~ '-' ~ type %}
+
+{{ r_id }}:
+  pkgrepo.managed:
+    - name: {{ r_type }} {{ r_options }} {{ r_url }} {{ r_distro }} {{ r_comps }}
+    - file: {{ sources_list_dir }}/{{ r_file }}
+    {# You can use either keyid+keyserver or key_url. If both are provided
+       the latter will be used. key_url is strongly preferred: keyservers
+       (including keyserver.ubuntu.com) are a less reliable, slower
+       resolution path than fetching the vendor's own published key file
+       directly, and are more prone to becoming stale/decommissioned -
+       see map.jinja's note on the old pool.sks-keyservers.net default. #}
+    {% if args.key_url is defined %}
+    - key_url: {{ args.key_url }}
+      {% if 'signed-by=' in r_opts|lower and args.aptkey is not defined %}
+    - aptkey: false
+      {% endif %}
+    {% elif args.key_text is defined %}
+    - key_text: {{ args.key_text }}
+    {% elif args.keyid is defined %}
+    - keyid: {{ args.keyid }}
+    - keyserver: {{ r_keyserver }}
+    {% endif %}
+    - clean_file: true
+    - refresh: False
+    - refresh_db: False
+    {% if args.aptkey is defined %}
+    - aptkey: {{ args.aptkey }}
+    {% endif %}
+    - onchanges_in:
+      - module: apt-repositories-refresh-db
+  file.managed:
+    - name: {{ sources_list_dir }}/{{ r_file }}
+    - replace: false
+    - require_in:
+      - file: apt-repositories-sources-list-dir
+      # require_in the directory clean state
+      # This way, we don't remove all the files, just to add them again.
+  {%- endfor %}
+{% endfor %}
+
+{% if repositories %}
+apt-repositories-refresh-db:
+  module.run:
+    - name: pkg.refresh_db
+{% endif %}

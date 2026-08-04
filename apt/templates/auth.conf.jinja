@@ -1,0 +1,9 @@
+# MANAGED BY SALTSTACK
+{%- from "apt/map.jinja" import apt as apt_map with context %}
+{%- set apt = pillar.get('apt', {}) %}
+{%- set auth = apt.get('auth', apt_map.auth) %}
+{%- if auth is defined %}
+{%- for host in auth %}
+machine {{ host.host }} login {{ host.login }} password {{ host.password }}
+{% endfor %}
+{%- endif %}
